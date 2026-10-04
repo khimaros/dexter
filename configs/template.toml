@@ -1,0 +1,119 @@
+# every knob of a config, with the default the tool assumes when a config says
+# nothing. copy this, delete what does not apply, and read what is left. run a
+# new apk through `--dump certs` and `--dump arrays` to see what to point at.
+
+# where the apk comes from when --apk does not say. the pattern is a shell glob
+# and ~ is expanded; a match on a directory name of version codes picks the
+# newest, which is what a cache of downloaded apks looks like.
+[apk]
+path = "~/.cache/dexter/com.example.app/*/base.apk"
+newest = true
+
+[scan]
+# which entries of the apk are code, as a regular expression. one dex per apk
+# is the usual case; classes\d*\.dex also covers the split ones.
+entry = 'classes\d*\.dex'
+# a pem certificate as the dex string pool keeps it, with its line breaks
+# escaped, and the escape to undo for the sake of the openssl command
+certificate = '-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\s\\n]+?-----END CERTIFICATE-----'
+certificate_unescape = '\n'
+# what a private key looks like once the tool has it in front of it, whether the
+# app decrypted it or never encrypted it at all
+private_key = '-----BEGIN PRIVATE KEY-----.*?-----END PRIVATE KEY-----'
+# a dex byte[] literal: the fill-array-data ident, an element width of one and
+# the length as a uint32, the bytes after it. another packing of the same idea
+# is a different header and a different length.
+array_header = "\u0000\u0003\u0001\u0000"
+array_size = 'u32le'
+array_minimum = 16
+
+[certs]
+# the distinguished name field a certificate is named for, lowercased and with
+# anything but letters and digits turned into dashes: O gives carservice.crt
+stem = "O"
+
+# the authority, found by every condition here and required to be exactly one
+# certificate. with no [certs.root] every certificate is written the same way
+# and none of it is verified.
+[certs.root]
+file = "ca.crt"
+self_signed = true
+subject = "Example Link Root"
+issuer = ""
+# checked, but not to find it: a different authority is a warning, not a failure
+fingerprint = "49:E5:2E:FC:13:AD:2E:D0:9F:20:4C:3B:10:69:8B:D8:4B:B7:10:5F:51:05:58:AA:14:B8:11:9A:5C:4A:D1:7F"  # or ""
+# ask the openssl command whether each other certificate verifies against it
+verify = true
+
+[keys]
+# a key whose certificate is not in the apk has no name to be saved under. set
+# this false to keep those anyway, as key-1.key and up.
+require_certificate = true
+# look for a private key in the clear in the code, for an app that bothers nobody
+plaintext = false
+
+# everything below is for an app that keeps a key encrypted in its own code and
+# mixes the stream it is keyed from out of material it carries. with no steps
+# the tool does not look.
+[derive]
+# the state the mixer rewrites, in bytes, and what it starts as: "zero",
+# "source", or that many bytes as hex
+state = 48
+seed = "zero"
+# what to try when the app mixes from its certificates: "none" once over all of
+# them, "cert" once for each, or "cert_pair" for every order of every pair
+vary = "cert_pair"
+# which certificates it mixes from: all of them, the ones the authority issued,
+# or the authority itself
+certificates = "all"
+# the state, as [from, to], holding the cipher key and the iv. the state is
+# written to the decrypt command as hex.
+key_slice = [0, 32]
+iv_slice = [32, 48]
+# the command that turns a blob back into a key, with the state's own bytes
+# filled in as hex: {key}, {iv} and {state}, which is the two joined
+decrypt = ["openssl", "enc", "-aes-256-cbc", "-d", "-K", "{key}", "-iv", "{iv}"]
+
+# the byte[] literals a step may be keyed from, and the ones that could be the
+# encrypted key. 0 means no bound, and a source of "none" mixes over nothing.
+[derive.source]
+from = "arrays"
+minimum = 48
+maximum = 0
+multiple = 0
+
+[derive.blob]
+from = "arrays"
+minimum = 512
+maximum = 8192
+multiple = 16
+
+# the derivation itself, one step at a time. each step mixes over an input
+# ("certs", "state", "source", "none", {text = "..."} or {bytes = "hex"}) a
+# number of rounds, and rewrites each byte of the state with an expression over:
+#
+#   v  the state byte before this update
+#   i  the index of the input byte being mixed
+#   j  the index of the state byte being rewritten
+#   n  the length of the source          S(k)  the source byte at index k
+#   m  the length of the input           D(k)  the input byte at index k
+#
+# and over + - * % // & | ^ << >> and -, ~, the operators add mul xor bor band
+# bnot sub mod min max shl shr rotl rotr, and any number of parentheses. the
+# result is taken modulo 256. the order is "byte" to mix one input byte over the
+# whole state before the next, or "state" to hold one state byte and work
+# through the input. a step's defaults are input "none", rounds 1, order "byte".
+[[derive.steps]]
+input = "certs"
+rounds = 1
+order = "byte"
+update = "add(rotl(v, 1), 33) ^ S(j) ^ D(i)"
+
+[[derive.steps]]
+input = "state"
+rounds = 7
+update = "add(rotl(v, 1), 33) ^ S(j) ^ D(i)"
+
+[output]
+# where to write, unless --out says otherwise. the default is under ~/.cache.
+dir = "~/.cache/dexter/com.example.app"

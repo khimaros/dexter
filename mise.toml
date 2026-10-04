@@ -1,0 +1,4 @@
+# pinned toolchain. exact versions only, so builds are reproducible.
+[tools]
+python = "3.14.7"
+ruff = "0.16.10"
